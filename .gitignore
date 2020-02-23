@@ -1,0 +1,2 @@
+# Currently ignored, as python-apt installation is broken with pipenv.
+/Pipfile.lock
