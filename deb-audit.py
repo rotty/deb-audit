@@ -107,7 +107,7 @@ class Cache:
 
     def dump(self):
         """Dump the cache to disk."""
-        os.makedirs(self._directory)
+        os.makedirs(self._directory, exist_ok=True)
         with atomic_write(self._source_map_cache(), overwrite=True) as output:
             json.dump(self._source_map, output)
         with atomic_write(self._issue_cache(), overwrite=True) as output:
