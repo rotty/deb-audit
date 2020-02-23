@@ -27,10 +27,13 @@ below, please file an
 ### Planned (aka "known bugs")
 
 - [ ] Automatically update the cache if it goes stale.
-- [ ] Scan all installed packages on the system, instead of a list of
-      `.deb` files.
 - [ ] A man page. In the mean time, refer to the `--help` output and
       the source code.
+
+### Likely implemented soon
+
+- [ ] Scan all installed packages on the system, instead of a list of
+      `.deb` files.
 
 ### Patches welcome
 
@@ -57,7 +60,7 @@ libxml2 amd64 2.9.4+dfsg1-8: 0 present, 8 ignored, 76 fixed
 
 ## Installation
 
-On a Debian system ("buster" or or later), the following should
+On a Debian system ("buster" or later), the following should
 suffice to install all required dependencies:
 
 ```sh
