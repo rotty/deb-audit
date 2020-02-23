@@ -5,6 +5,7 @@ name = "pypi"
 
 [packages]
 psycopg2 = "*"
+python-apt = "*"
 
 [dev-packages]
 
