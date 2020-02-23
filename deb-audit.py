@@ -113,10 +113,11 @@ class Cache:
 
     def load_udd(self, conn):
         """Load the cache contents from UDD."""
-        source_map = fetch_source_map(conn, release=self._release, architecture=self._arch)
-        issue_map = {}
-        for issue in fetch_issues(conn, release=self._release):
-            issue_map.setdefault(issue.source, []).append(issue)
+        with conn.cursor() as cursor:
+            source_map = fetch_source_map(cursor, release=self._release, architecture=self._arch)
+            issue_map = {}
+            for issue in fetch_issues(cursor, release=self._release):
+                issue_map.setdefault(issue.source, []).append(issue)
         self._source_map = source_map
         self._issue_map = issue_map
 
@@ -137,9 +138,8 @@ class Cache:
     def _source_map_cache(self):
         return path.join(self._directory, f'{self._release}-{self._arch}.source-map.json')
 
-def fetch_source_map(conn, *, release, architecture):
+def fetch_source_map(cursor, *, release, architecture):
     """Fetch a mapping from binary to source package names and versions from UDD."""
-    cursor = conn.cursor()
     cursor.execute("SELECT package, version, source from all_packages"
                    " WHERE distribution = 'debian'"
                    "   AND release = %(release)s"
@@ -155,9 +155,8 @@ def fetch_source_map(conn, *, release, architecture):
         source_map.setdefault(package, []).append((version, source))
     return source_map
 
-def fetch_issues(conn, *, release):
+def fetch_issues(cursor, *, release):
     """Fetch the issues for a Debian release from UDD."""
-    cursor = conn.cursor()
     cursor.execute("SELECT i.source, i.issue, i.description, i.scope, i.bug,"
                    "       r.fixed_version, r.status"
                    " FROM security_issues AS i"
