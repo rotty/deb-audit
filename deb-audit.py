@@ -65,11 +65,11 @@ class Issue:
 
 class Cache:
     """Keeps data from UDD relating to security issues for a Debian release and architecture."""
-    def __init__(self, *, directory, release, architecture):
+    def __init__(self, *, directory, release, architectures):
         self._directory = directory
-        self._arch = architecture
+        self._archs = architectures
         self._release = release
-        self._source_map = {}
+        self._source_maps = {}
         self._issue_map = {}
 
     def is_present(self):
@@ -95,21 +95,25 @@ class Cache:
                 json_dict = json.loads(line)
                 issue = Issue(**json_dict)
                 issue_map.setdefault(issue.source, []).append(issue)
-        source_map = {}
-        with open(self._source_map_cache()) as cache_file:
-            json_map = json.load(cache_file)
-        for package, versions in json_map.items():
-            # Tupelize items for symmetry with `fetch_source_map`
-            # pylint: disable=unnecessary-comprehension
-            source_map[package] = [(version, source) for version, source in versions]
+        source_maps = {}
+        for arch in self._archs:
+            with open(self._source_map_cache(arch)) as cache_file:
+                json_map = json.load(cache_file)
+            source_map = {}
+            for package, versions in json_map.items():
+                # Tupelize items for symmetry with `fetch_source_map`
+                # pylint: disable=unnecessary-comprehension
+                source_map[package] = [(version, source) for version, source in versions]
+            source_maps[arch] = source_map
         self._issue_map = issue_map
-        self._source_map = source_map
+        self._source_maps = source_maps
 
     def dump(self):
         """Dump the cache to disk."""
         os.makedirs(self._directory, exist_ok=True)
-        with atomic_write(self._source_map_cache(), overwrite=True) as output:
-            json.dump(self._source_map, output)
+        for arch in self._archs:
+            with atomic_write(self._source_map_cache(arch), overwrite=True) as output:
+                json.dump(self._source_maps[arch], output)
         with atomic_write(self._issue_cache(), overwrite=True) as output:
             for issues in self._issue_map.values():
                 for issue in issues:
@@ -119,33 +123,35 @@ class Cache:
     def load_udd(self, conn):
         """Load the cache contents from UDD."""
         with conn.cursor() as cursor:
-            source_map = fetch_source_map(cursor, release=self._release, architecture=self._arch)
+            source_maps = {}
+            for arch in self._archs:
+                source_maps[arch] = fetch_source_map(cursor, release=self._release, architecture=arch)
             issue_map = {}
             for issue in fetch_issues(cursor, release=self._release):
                 issue_map.setdefault(issue.source, []).append(issue)
-        self._source_map = source_map
+        self._source_maps = source_maps
         self._issue_map = issue_map
 
-    def is_known(self, *, package):
+    def is_known(self, *, package, architecture):
         """Check if the cache contains information about a binary package."""
-        return package in self._source_map
+        return package in self._source_maps[architecture]
 
-    def issues(self, *, package):
+    def issues(self, *, package, architecture):
         """Yield all issues in a binary package."""
-        versions = self._source_map[package]
+        versions = self._source_maps[architecture][package]
         sources = {source for _version, source in versions}
         for source in sources:
             for issue in self._issue_map.get(source, []):
                 yield issue
 
     def _cache_files(self):
-        return [self._source_map_cache(), self._issue_cache()]
+        return [self._source_map_cache(arch) for arch in self._archs] + [self._issue_cache()]
 
     def _issue_cache(self):
         return path.join(self._directory, f'{self._release}-issues.json')
 
-    def _source_map_cache(self):
-        return path.join(self._directory, f'{self._release}-{self._arch}.source-map.json')
+    def _source_map_cache(self, arch):
+        return path.join(self._directory, f'{self._release}-{arch}.source-map.json')
 
 def fetch_source_map(cursor, *, release, architecture):
     """Fetch a mapping from binary to source package names and versions from UDD."""
@@ -196,28 +202,32 @@ def udd_connect():
     conn.set_client_encoding('UTF8')
     return conn
 
-def message(msg):
-    """Issue an informational message to stderr."""
-    print('* ' + msg, file=sys.stderr)
+@dataclass
+class Package:
+    name: str
+    version: str
+    architecture: str
+
+    @staticmethod
+    def from_control(control):
+        return Package(name=control['Package'],
+                       version=control['Version'],
+                       architecture=control['Architecture'])
+
+    def __str__(self):
+        return f'{self.name} {self.architecture} {self.version}'
 
 def scan_packages(filenames):
     """Parse names and versions from .deb files.
 
-    The names must currently all refer to a single architecture, which is returned as first return
-    value.
+    Returns a list of `Package`.
     """
-    archs = set()
-    versions = []
+    packages = []
     for filename in filenames:
         deb = DebFile(filename)
         control = deb.debcontrol()
-        name = control['Package']
-        version = control['Version']
-        archs.add(control['Architecture'])
-        versions.append((name, version))
-    if len(archs) > 1:
-        assert False # FIXME: proper exception
-    return archs.pop(), versions
+        packages.append(Package.from_control(deb.debcontrol()))
+    return packages
 
 @dataclass
 class Summary:
@@ -249,48 +259,73 @@ class Summary:
                 present.append(issue)
         return Summary(issues_fixed=fixed, issues_present=present, issues_ignored=ignored)
 
+class Checker:
+    """Implements the deb-audit CLI logic."""
+
+    def __init__(self, *, release, files, verbose=False):
+        self._release = release
+        self._files = files
+        self._verbose = verbose
+
+    def run(self):
+        packages = scan_packages(self._files)
+        cache_dir = path.expanduser('~/.cache/deb-audit')
+        archs = {pkg.architecture for pkg in packages}
+        cache = Cache(directory=cache_dir, release=self._release, architectures=archs)
+        if cache.is_present():
+            updated = cache.last_updated()
+            local_time = time.strftime('%Y-%m-%d %H:%M %z', time.localtime(updated))
+            self._message(f'Loading cache (last update: {local_time})')
+            cache.load()
+        else:
+            self._message('Cache not found, loading data from UDD')
+            with udd_connect() as conn:
+                cache.load_udd(conn)
+            self._message('Data loaded sucessfully, dumping to disk')
+            cache.dump()
+        total_present = 0
+        total_unknown = 0
+        for pkg in packages:
+            if not cache.is_known(package=pkg.name, architecture=pkg.architecture):
+                print(f'Unknown in release "{self._release}": {pkg} ')
+                total_unknown += 1
+                continue
+            issues = cache.issues(package=pkg.name, architecture=pkg.architecture)
+            summary = Summary.from_issues(issues, version=pkg.version)
+            n_present = len(summary.issues_present)
+            n_ignored = len(summary.issues_ignored)
+            n_fixed = len(summary.issues_fixed)
+            print(f'{pkg}: {n_present} present, {n_ignored} ignored, {n_fixed} fixed')
+            total_present += n_present
+        if total_present > 0:
+            self._message(f'Found {total_present} not-ignored issues')
+            return False
+        elif total_unknown > 0:
+            self._message(f'Found {total_unknown} unknown issues')
+            return False
+        else:
+            self._message(f'No non-ignored issues found')
+            return True
+
+    def _message(self, msg):
+        """In verbose mode, issue an informational message to stderr."""
+        if self._verbose:
+            print('* ' + msg, file=sys.stderr)
+
 def main():
     """Top-level entry point."""
     parser = argparse.ArgumentParser(description='Check Debian packages for know vulnerabilities')
-    parser.add_argument('--release', type=str, default='buster',
+    parser.add_argument('-r', '--release', type=str, default='buster',
                         help='Debian release (default "buster")')
-    parser.add_argument('debs', metavar='DEB', type=str, nargs='+', help='Debian package names')
+    parser.add_argument('--verbose', action='store_true',
+                        help='Show informational messages')
+    parser.add_argument('files', metavar='FILE', type=str, nargs='+', help='Debian package names')
     args = parser.parse_args()
-    architecture, pkgs = scan_packages(args.debs)
-    cache_dir = path.expanduser('~/.cache/deb-audit')
-    cache = Cache(directory=cache_dir, release=args.release, architecture=architecture)
-    if cache.is_present():
-        updated = cache.last_updated()
-        local_time = time.strftime('%Y-%m-%d %H:%M %z', time.localtime(updated))
-        message(f'Loading cache (last update: {local_time})')
-        cache.load()
-    else:
-        message('Cache not found, loading data from UDD')
-        with udd_connect() as conn:
-            cache.load_udd(conn)
-        message('Data loaded sucessfully, dumping to disk')
-        cache.dump()
-    total_present = 0
-    total_unknown = 0
-    for name, version in pkgs:
-        if not cache.is_known(package=name):
-            print(f'Package {name} unknown in release {args.release}')
-            total_unknown += 1
-            continue
-        summary = Summary.from_issues(cache.issues(package=name), version=version)
-        n_present = len(summary.issues_present)
-        n_ignored = len(summary.issues_ignored)
-        n_fixed = len(summary.issues_fixed)
-        print(f'Package {name} {version}: {n_present} present, {n_ignored} ignored, {n_fixed} fixed')
-        total_present += n_present
-    if total_present > 0:
-        message(f'Found {total_present} not-ignored issues')
-        sys.exit(1)
-    elif total_unknown > 0:
-        message(f'Found {total_unknown} unknown issues')
-    else:
-        message(f'No non-ignored issues found')
+    checker = Checker(release=args.release, files=args.files, verbose=args.verbose)
+    if checker.run():
         sys.exit(0)
+    else:
+        sys.exit(1)
 
 if __name__ == '__main__':
     main()
