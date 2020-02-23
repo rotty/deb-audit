@@ -60,6 +60,9 @@ class Issue:
         """Check if a security issue is present in a specific version of the package."""
         return not self.fixed_version or apt_pkg.version_compare(version, self.fixed_version) < 0
 
+    def is_ignored(self):
+        return self.nodsa is not None
+
 class Cache:
     """Keeps data from UDD relating to security issues for a Debian release and architecture."""
     def __init__(self, *, directory, release, architecture):
@@ -235,7 +238,7 @@ def main():
         cache.dump()
     for name, version in pkgs:
         for issue in cache.issues(package=name):
-            if issue.is_present_in(version):
+            if issue.is_present_in(version) and not issue.is_ignored():
                 print(issue)
 
 if __name__ == '__main__':
