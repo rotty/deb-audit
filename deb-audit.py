@@ -37,11 +37,12 @@ import time
 import sys
 
 # External dependency imports
+from atomicwrites import atomic_write
 import psycopg2
 # TODO: implement the comparison in pure python, it's not worth pulling in a depedency on native
 # code just for that function.
 from apt import apt_pkg
-from atomicwrites import atomic_write
+from debian.debfile import DebFile
 
 @dataclass
 class Issue:
@@ -190,10 +191,35 @@ def message(msg):
     """Issue an informational message to stderr."""
     print('* ' + msg, file=sys.stderr)
 
+def scan_packages(filenames):
+    """Parse names and versions from .deb files.
+
+    The names must currently all refer to a single architecture, which is returned as first return
+    value.
+    """
+    archs = set()
+    versions = []
+    for filename in filenames:
+        deb = DebFile(filename)
+        control = deb.debcontrol()
+        name = control['Package']
+        version = control['Version']
+        archs.add(control['Architecture'])
+        versions.append((name, version))
+    if len(archs) > 1:
+        assert False # FIXME: proper exception
+    return archs.pop(), versions
+
 def main():
     """Top-level entry point."""
+    parser = argparse.ArgumentParser(description='Check Debian packages for know vulnerabilities')
+    parser.add_argument('--release', type=str, default='buster',
+                        help='Debian release (default "buster")')
+    parser.add_argument('debs', metavar='DEB', type=str, nargs='+', help='Debian package names')
+    args = parser.parse_args()
+    architecture, pkgs = scan_packages(args.debs)
     cache_dir = path.expanduser('~/.cache/deb-audit')
-    cache = Cache(directory=cache_dir, release='buster', architecture='amd64')
+    cache = Cache(directory=cache_dir, release=args.release, architecture=architecture)
     if cache.is_present():
         updated = cache.last_updated()
         local_time = time.strftime('%Y-%m-%d %H:%M %z', time.localtime(updated))
@@ -205,9 +231,10 @@ def main():
             cache.load_udd(conn)
         message('Data loaded sucessfully, dumping to disk')
         cache.dump()
-    for issue in cache.issues(package='libxml2'):
-        if issue.is_present_in('2.9.4+dfsg1-8'):
-            print(issue)
+    for name, version in pkgs:
+        for issue in cache.issues(package=name):
+            if issue.is_present_in(version):
+                print(issue)
 
 if __name__ == '__main__':
     main()

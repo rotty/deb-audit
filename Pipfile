@@ -8,6 +8,7 @@ psycopg2 = "*"
 # FIXME: `python-apt` seems to be broken with `pipenv`, raising
 # "ModuleNotFoundError: No module named 'DistUtilsExtra'".
 python-apt = "*"
+python-debian = "*"
 atomicwrites = "*"
 
 [dev-packages]
