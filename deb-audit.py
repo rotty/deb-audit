@@ -54,6 +54,7 @@ class Issue:
     bug: int
     fixed_version: str
     status: str
+    nodsa: str
 
     def is_present_in(self, version):
         """Check if a security issue is present in a specific version of the package."""
@@ -159,7 +160,7 @@ def fetch_source_map(cursor, *, release, architecture):
 def fetch_issues(cursor, *, release):
     """Fetch the issues for a Debian release from UDD."""
     cursor.execute("SELECT i.source, i.issue, i.description, i.scope, i.bug,"
-                   "       r.fixed_version, r.status"
+                   "       r.fixed_version, r.status, r.nodsa"
                    " FROM security_issues AS i"
                    " INNER JOIN security_issues_releases AS r"
                    " ON i.source = r.source AND i.issue = r.issue"
@@ -169,14 +170,15 @@ def fetch_issues(cursor, *, release):
         row = cursor.fetchone()
         if row is None:
             break
-        source, issue, description, scope, bug, fixed_version, status = row
+        source, issue, description, scope, bug, fixed_version, status, nodsa = row
         yield Issue(source=source,
                     description=description,
                     scope=scope,
                     fixed_version=fixed_version,
                     issue=issue,
                     bug=bug,
-                    status=status)
+                    status=status,
+                    nodsa=nodsa)
 
 def udd_connect():
     """Connect to the public read-only mirror of UDD."""
