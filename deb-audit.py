@@ -277,9 +277,10 @@ class Summary:
 class Checker:
     """Implements the deb-audit CLI logic."""
 
-    def __init__(self, *, release, files, verbose=False):
+    def __init__(self, *, release, files, show_all=False, verbose=False):
         self._release = release
         self._files = files
+        self._show_all = show_all
         self._verbose = verbose
 
     def run(self):
@@ -310,7 +311,8 @@ class Checker:
             n_present = len(summary.issues_present)
             n_ignored = len(summary.issues_ignored)
             n_fixed = len(summary.issues_fixed)
-            print(f'{pkg}: {n_present} present, {n_ignored} ignored, {n_fixed} fixed')
+            if self._show_all or n_present > 0:
+                print(f'{pkg}: {n_present} present, {n_ignored} ignored, {n_fixed} fixed')
             total_present += n_present
         if total_present > 0:
             self._message(f'Found {total_present} not-ignored issues')
@@ -334,9 +336,12 @@ def main():
                         help='Debian release (default "buster")')
     parser.add_argument('--verbose', action='store_true',
                         help='Show informational messages')
+    parser.add_argument('-a', '--show-all', action='store_true',
+                        help='Show stats for clean packages as well')
     parser.add_argument('files', metavar='FILE', type=str, nargs='+', help='Debian package names')
     args = parser.parse_args()
-    checker = Checker(release=args.release, files=args.files, verbose=args.verbose)
+    checker = Checker(release=args.release, files=args.files,
+                      show_all=args.show_all, verbose=args.verbose)
     if checker.run():
         sys.exit(0)
     else:
