@@ -77,7 +77,7 @@ it should make it obvious which packages are needed; namely:
 pip3 install atomicwrites python-apt python-debian psycopg2
 ```
 
-When all dependencies installed, you can just run `python3
+With all dependencies installed, you can just run `python3
 deb-audit.py` or copy `deb-audit.py` into `$PATH`, making sure it is
 executable. The recommended name for the script, if placed on `$PATH`
 is `deb-audit`.
