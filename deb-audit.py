@@ -33,6 +33,8 @@ import os
 from os import path
 import json
 import argparse
+import time
+import sys
 
 # External dependency imports
 import psycopg2
@@ -67,7 +69,16 @@ class Cache:
 
     def is_present(self):
         """Check if the cache files are present on disk."""
-        return path.exists(self._source_map_cache()) and path.exists(self._issue_cache())
+        return all(path.exists(filename) for filename in self._cache_files())
+
+    def last_updated(self):
+        """Returns the time the cache was last updated, or `None` if it is not present.
+
+        The timestamp returned is an epoch-based number of seconds.
+        """
+        if not self.is_present():
+            return None
+        return min(path.getmtime(filename) for filename in self._cache_files())
 
     def load(self):
         """Load the cache from disk."""
@@ -116,6 +127,9 @@ class Cache:
         for source in sources:
             for issue in self._issue_map.get(source, []):
                 yield issue
+
+    def _cache_files(self):
+        return [self._source_map_cache(), path.exists(self._issue_cache())]
 
     def _issue_cache(self):
         return path.join(self._directory, f'{self._release}-issues.json')
@@ -173,15 +187,24 @@ def udd_connect():
     conn.set_client_encoding('UTF8')
     return conn
 
+def message(msg):
+    """Issue an informational message to stderr."""
+    print('* ' + msg, file=sys.stderr)
+
 def main():
     """Top-level entry point."""
     cache_dir = path.expanduser('~/.cache/deb-audit')
     cache = Cache(directory=cache_dir, release='buster', architecture='amd64')
     if cache.is_present():
+        updated = cache.last_updated()
+        local_time = time.strftime('%Y-%m-%d %H:%M %z', time.localtime(updated))
+        message(f'Loading cache (last update: {local_time})')
         cache.load()
     else:
+        message('Cache not found, loading data from UDD')
         with udd_connect() as conn:
             cache.load_udd(conn)
+        message('Data loaded sucessfully, dumping to disk')
         cache.dump()
     for issue in cache.issues(package='libxml2'):
         if issue.is_present_in('2.9.4+dfsg1-8'):
