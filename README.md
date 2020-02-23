@@ -34,6 +34,7 @@ below, please file an
 
 - [ ] Scan all installed packages on the system, instead of a list of
       `.deb` files.
+- [ ] JSON output.
 
 ### Patches welcome
 
