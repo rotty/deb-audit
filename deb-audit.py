@@ -215,6 +215,36 @@ def scan_packages(filenames):
         assert False # FIXME: proper exception
     return archs.pop(), versions
 
+@dataclass
+class Summary:
+    """A summary of issues found in for a package."""
+    issues_fixed: list
+    issues_present: list
+    issues_ignored: list
+
+    @staticmethod
+    def from_issues(issues, *, version=None):
+        """Construct a summary from a list of issues.
+
+        If `version` is supplied, consider it to determine if a issue is fixed. If not supplied, all
+        issues will be considered unfixed (i.e. present or ignored).
+        """
+        fixed, present, ignored = [], [], []
+        for issue in issues:
+            if version:
+                if issue.is_present_in(version):
+                    if issue.is_ignored():
+                        ignored.append(issue)
+                    else:
+                        present.append(issue)
+                else:
+                    fixed.append(issue)
+            elif issue.is_ignored():
+                ignored.append(issue)
+            else:
+                present.append(issue)
+        return Summary(issues_fixed=fixed, issues_present=present, issues_ignored=ignored)
+
 def main():
     """Top-level entry point."""
     parser = argparse.ArgumentParser(description='Check Debian packages for know vulnerabilities')
@@ -236,10 +266,20 @@ def main():
             cache.load_udd(conn)
         message('Data loaded sucessfully, dumping to disk')
         cache.dump()
+    total_present = 0
     for name, version in pkgs:
-        for issue in cache.issues(package=name):
-            if issue.is_present_in(version) and not issue.is_ignored():
-                print(issue)
+        summary = Summary.from_issues(cache.issues(package=name), version=version)
+        n_present = len(summary.issues_present)
+        n_ignored = len(summary.issues_ignored)
+        n_fixed = len(summary.issues_fixed)
+        print(f'Package {name} {version}: {n_present} present, {n_ignored} ignored, {n_fixed} fixed')
+        total_present += n_present
+    if total_present > 0:
+        message(f'Found {total_present} not-ignored issues')
+        sys.exit(1)
+    else:
+        message(f'No non-ignored issues found')
+        sys.exit(0)
 
 if __name__ == '__main__':
     main()
