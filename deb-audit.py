@@ -65,15 +65,19 @@ class Issue:
 
 class Cache:
     """Keeps data from UDD relating to security issues for a Debian release and architecture."""
-    def __init__(self, *, directory, release, architectures):
+    def __init__(self, *, directory, release, architectures, message_sink=None):
         self._directory = directory
         self._archs = architectures
         self._release = release
         self._source_maps = {}
         self._issue_map = {}
+        if message_sink is None:
+            message_sink = lambda _: None
+        self._message = message_sink
+        self._load()
 
-    def is_present(self):
-        """Check if the cache files are present on disk."""
+    def is_complete(self):
+        """Check if all required cache files are present on disk."""
         return all(path.exists(filename) for filename in self._cache_files())
 
     def last_updated(self):
@@ -81,24 +85,30 @@ class Cache:
 
         The timestamp returned is an epoch-based number of seconds.
         """
-        if not self.is_present():
+        if not self.is_complete():
             return None
         return min(path.getmtime(filename) for filename in self._cache_files())
 
-    def load(self):
-        """Load the cache from disk."""
+    def _load(self):
+        """Load existing parts of the cache from disk."""
         # It's somewhat unfortunate that we are limited to line-delimited JSON here, but it seems
         # Python's json.load always tries to parse the complete input.
         issue_map = {}
-        with open(self._issue_cache()) as cache_file:
-            for line in cache_file:
-                json_dict = json.loads(line)
-                issue = Issue(**json_dict)
-                issue_map.setdefault(issue.source, []).append(issue)
+        try:
+            with open(self._issue_cache()) as cache_file:
+                for line in cache_file:
+                    json_dict = json.loads(line)
+                    issue = Issue(**json_dict)
+                    issue_map.setdefault(issue.source, []).append(issue)
+        except FileNotFoundError:
+            pass
         source_maps = {}
         for arch in self._archs:
-            with open(self._source_map_cache(arch)) as cache_file:
-                json_map = json.load(cache_file)
+            try:
+                with open(self._source_map_cache(arch)) as cache_file:
+                    json_map = json.load(cache_file)
+            except FileNotFoundError:
+                continue
             source_map = {}
             for package, versions in json_map.items():
                 # Tupelize items for symmetry with `fetch_source_map`
@@ -120,17 +130,22 @@ class Cache:
                     json.dump(dataclasses.asdict(issue), output)
                     output.write('\n')
 
-    def load_udd(self, conn):
-        """Load the cache contents from UDD."""
+    def load_missing(self, conn):
+        """Load missing cache contents from UDD."""
         with conn.cursor() as cursor:
             source_maps = {}
             for arch in self._archs:
-                source_maps[arch] = fetch_source_map(cursor, release=self._release, architecture=arch)
-            issue_map = {}
-            for issue in fetch_issues(cursor, release=self._release):
-                issue_map.setdefault(issue.source, []).append(issue)
-        self._source_maps = source_maps
-        self._issue_map = issue_map
+                if arch not in self._source_maps:
+                    self._message(f'Loading source map for {self._release} {arch}')
+                    self._source_maps[arch] = fetch_source_map(cursor,
+                                                               release=self._release,
+                                                               architecture=arch)
+            if self._issue_map is None:
+                self._message(f'Loading issues for {self._release}')
+                issue_map = {}
+                for issue in fetch_issues(cursor, release=self._release):
+                    issue_map.setdefault(issue.source, []).append(issue)
+                self._issue_map = issue_map
 
     def is_known(self, *, package, architecture):
         """Check if the cache contains information about a binary package."""
@@ -271,16 +286,16 @@ class Checker:
         packages = scan_packages(self._files)
         cache_dir = path.expanduser('~/.cache/deb-audit')
         archs = {pkg.architecture for pkg in packages}
-        cache = Cache(directory=cache_dir, release=self._release, architectures=archs)
-        if cache.is_present():
+        cache = Cache(directory=cache_dir, release=self._release, architectures=archs,
+                      message_sink=self._message)
+        if cache.is_complete():
             updated = cache.last_updated()
             local_time = time.strftime('%Y-%m-%d %H:%M %z', time.localtime(updated))
             self._message(f'Loading cache (last update: {local_time})')
-            cache.load()
         else:
-            self._message('Cache not found, loading data from UDD')
+            self._message('Cache incomplete, loading data from UDD')
             with udd_connect() as conn:
-                cache.load_udd(conn)
+                cache.load_missing(conn)
             self._message('Data loaded sucessfully, dumping to disk')
             cache.dump()
         total_present = 0
