@@ -135,7 +135,7 @@ class Cache:
                 yield issue
 
     def _cache_files(self):
-        return [self._source_map_cache(), path.exists(self._issue_cache())]
+        return [self._source_map_cache(), self._issue_cache()]
 
     def _issue_cache(self):
         return path.join(self._directory, f'{self._release}-issues.json')
