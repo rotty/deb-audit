@@ -126,6 +126,10 @@ class Cache:
         self._source_map = source_map
         self._issue_map = issue_map
 
+    def is_known(self, *, package):
+        """Check if the cache contains information about a binary package."""
+        return package in self._source_map
+
     def issues(self, *, package):
         """Yield all issues in a binary package."""
         versions = self._source_map[package]
@@ -267,7 +271,12 @@ def main():
         message('Data loaded sucessfully, dumping to disk')
         cache.dump()
     total_present = 0
+    total_unknown = 0
     for name, version in pkgs:
+        if not cache.is_known(package=name):
+            print(f'Package {name} unknown in release {args.release}')
+            total_unknown += 1
+            continue
         summary = Summary.from_issues(cache.issues(package=name), version=version)
         n_present = len(summary.issues_present)
         n_ignored = len(summary.issues_ignored)
@@ -277,6 +286,8 @@ def main():
     if total_present > 0:
         message(f'Found {total_present} not-ignored issues')
         sys.exit(1)
+    elif total_unknown > 0:
+        message(f'Found {total_unknown} unknown issues')
     else:
         message(f'No non-ignored issues found')
         sys.exit(0)
