@@ -1,4 +1,4 @@
-### deb-audit.py -- Check debian packages for known security issues
+#!/usr/bin/env python3
 
 ## Copyright © 2020 Andreas Rottmann <mail@r0tty.org>
 
@@ -17,6 +17,16 @@
 ## You should have received a copy of the GNU General Public License
 ## along with this program. If not, see <http://www.gnu.org/licenses/>.
 
+"""Check debian packages for known security issues.
+
+Queries the Ultimate Debian Database (UDD) for security issues, and allows to checking specific
+(binary) package versions for issues.
+
+To avoid querying UDD for each invokation, it maintains a simple JSON-based cache of the required
+information.
+"""
+
+
 import dataclasses
 from dataclasses import dataclass
 import os
@@ -27,8 +37,7 @@ import argparse
 import psycopg2
 # TODO: implement the comparison in pure python, it's not worth pulling in a depedency on native
 # code just for that function.
-import apt
-version_compare = apt.apt_pkg.version_compare
+from apt import apt_pkg
 
 @dataclass
 class Issue:
@@ -42,9 +51,11 @@ class Issue:
     status: str
 
     def is_present_in(self, version):
-        return not self.fixed_version or version_compare(version, self.fixed_version) < 0
+        """Check if a security issue is present in a specific version of the package."""
+        return not self.fixed_version or apt_pkg.version_compare(version, self.fixed_version) < 0
 
 class Cache:
+    """Keeps data from UDD relating to security issues for a Debian release and architecture."""
     def __init__(self, *, directory, release, architecture):
         self._directory = directory
         self._arch = architecture
@@ -57,31 +68,36 @@ class Cache:
         return path.exists(self._source_map_cache()) and path.exists(self._issue_cache())
 
     def load(self):
+        """Load the cache from disk."""
         # It's somewhat unfortunate that we are limited to line-delimited JSON here, but it seems
         # Python's json.load always tries to parse the complete input.
         issue_map = {}
-        with open(self._issue_cache()) as f:
-            for line in f:
+        with open(self._issue_cache()) as cache_file:
+            for line in cache_file:
                 json_dict = json.loads(line)
                 issue = Issue(**json_dict)
                 issue_map.setdefault(issue.source, []).append(issue)
         source_map = {}
-        with open(self._source_map_cache()) as f:
-            json_map = json.load(f)
+        with open(self._source_map_cache()) as cache_file:
+            json_map = json.load(cache_file)
         for package, versions in json_map.items():
+            # Tupelize items for symmetry with `fetch_source_map`
+            # pylint: disable=unnecessary-comprehension
             source_map[package] = [(version, source) for version, source in versions]
         self._issue_map = issue_map
         self._source_map = source_map
 
     def dump(self):
+        """Dump the cache to disk."""
         # TODO: use atomic renames
-        with open(self._source_map_cache(), mode='w') as f:
-            json.dump(self._source_map, f)
-        with open(self._issue_cache(), mode='w') as f:
+        os.makedirs(self._directory)
+        with open(self._source_map_cache(), mode='w') as output:
+            json.dump(self._source_map, output)
+        with open(self._issue_cache(), mode='w') as output:
             for issues in self._issue_map.values():
                 for issue in issues:
-                    json.dump(dataclasses.asdict(issue), f)
-                    f.write('\n')
+                    json.dump(dataclasses.asdict(issue), output)
+                    output.write('\n')
 
     def load_udd(self, conn):
         """Load the cache contents from UDD."""
@@ -93,6 +109,7 @@ class Cache:
         self._issue_map = issue_map
 
     def issues(self, *, package):
+        """Yield all issues in a binary package."""
         versions = self._source_map[package]
         sources = {source for _version, source in versions}
         for source in sources:
@@ -106,6 +123,7 @@ class Cache:
         return path.join(self._directory, f'{self._release}-{self._arch}.source-map.json')
 
 def fetch_source_map(conn, *, release, architecture):
+    """Fetch a mapping from binary to source package names and versions from UDD."""
     cursor = conn.cursor()
     cursor.execute("SELECT package, version, source from all_packages"
                    " WHERE distribution = 'debian'"
@@ -123,8 +141,10 @@ def fetch_source_map(conn, *, release, architecture):
     return source_map
 
 def fetch_issues(conn, *, release):
+    """Fetch the issues for a Debian release from UDD."""
     cursor = conn.cursor()
-    cursor.execute("SELECT i.source, i.issue, i.description, i.scope, i.bug, r.fixed_version, r.status "
+    cursor.execute("SELECT i.source, i.issue, i.description, i.scope, i.bug,"
+                   "       r.fixed_version, r.status"
                    " FROM security_issues AS i"
                    " INNER JOIN security_issues_releases AS r"
                    " ON i.source = r.source AND i.issue = r.issue"
@@ -144,6 +164,7 @@ def fetch_issues(conn, *, release):
                     status=status)
 
 def udd_connect():
+    """Connect to the public read-only mirror of UDD."""
     conn = psycopg2.connect(host='udd-mirror.debian.net',
                             user='udd-mirror',
                             password='udd-mirror',
@@ -151,16 +172,19 @@ def udd_connect():
     conn.set_client_encoding('UTF8')
     return conn
 
-if __name__ == '__main__':
+def main():
+    """Top-level entry point."""
     cache_dir = path.expanduser('~/.cache/deb-audit')
     cache = Cache(directory=cache_dir, release='buster', architecture='amd64')
     if cache.is_present():
         cache.load()
     else:
-        os.makedirs(cache_dir)
         with udd_connect() as conn:
             cache.load_udd(conn)
         cache.dump()
     for issue in cache.issues(package='libxml2'):
         if issue.is_present_in('2.9.4+dfsg1-8'):
             print(issue)
+
+if __name__ == '__main__':
+    main()
