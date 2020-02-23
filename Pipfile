@@ -5,7 +5,10 @@ name = "pypi"
 
 [packages]
 psycopg2 = "*"
+# FIXME: `python-apt` seems to be broken with `pipenv`, raising
+# "ModuleNotFoundError: No module named 'DistUtilsExtra'".
 python-apt = "*"
+atomicwrites = "*"
 
 [dev-packages]
 

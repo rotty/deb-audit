@@ -26,7 +26,7 @@ To avoid querying UDD for each invokation, it maintains a simple JSON-based cach
 information.
 """
 
-
+# Standard library imports
 import dataclasses
 from dataclasses import dataclass
 import os
@@ -34,10 +34,12 @@ from os import path
 import json
 import argparse
 
+# External dependency imports
 import psycopg2
 # TODO: implement the comparison in pure python, it's not worth pulling in a depedency on native
 # code just for that function.
 from apt import apt_pkg
+from atomicwrites import atomic_write
 
 @dataclass
 class Issue:
@@ -89,11 +91,10 @@ class Cache:
 
     def dump(self):
         """Dump the cache to disk."""
-        # TODO: use atomic renames
         os.makedirs(self._directory)
-        with open(self._source_map_cache(), mode='w') as output:
+        with atomic_write(self._source_map_cache(), overwrite=True) as output:
             json.dump(self._source_map, output)
-        with open(self._issue_cache(), mode='w') as output:
+        with atomic_write(self._issue_cache(), overwrite=True) as output:
             for issues in self._issue_map.values():
                 for issue in issues:
                     json.dump(dataclasses.asdict(issue), output)
