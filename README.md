@@ -29,11 +29,10 @@ below, please file an
 - [ ] Automatically update the cache if it goes stale.
 - [ ] A man page. In the mean time, refer to the `--help` output and
       the source code.
+- [ ] Use the current system's release as a default for `--release`.
 
 ### Likely implemented soon
 
-- [ ] Scan all installed packages on the system, instead of a list of
-      `.deb` files.
 - [ ] JSON output.
 
 ### Patches welcome

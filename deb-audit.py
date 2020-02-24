@@ -39,8 +39,7 @@ import sys
 # External dependency imports
 from atomicwrites import atomic_write
 import psycopg2
-# TODO: implement the comparison in pure python, it's not worth pulling in a depedency on native
-# code just for that function.
+import apt
 from apt import apt_pkg
 from debian.debfile import DebFile
 
@@ -274,19 +273,32 @@ class Summary:
                 present.append(issue)
         return Summary(issues_fixed=fixed, issues_present=present, issues_ignored=ignored)
 
+def installed_packages():
+    """Obtain a list of packages installed on the system."""
+    cache = apt.cache.Cache()
+    packages = []
+    for name in cache.keys():
+        pkg = cache[name]
+        if not pkg.is_installed:
+            continue
+        installed = pkg.installed
+        packages.append(Package(name=name,
+                                version=installed.version,
+                                architecture=installed.architecture))
+    return packages
+
 class Checker:
     """Implements the deb-audit CLI logic."""
 
-    def __init__(self, *, release, files, show_all=False, verbose=False):
+    def __init__(self, *, release, packages, show_all=False, verbose=False):
         self._release = release
-        self._files = files
+        self._packages = packages
         self._show_all = show_all
         self._verbose = verbose
 
     def run(self):
-        packages = scan_packages(self._files)
         cache_dir = path.expanduser('~/.cache/deb-audit')
-        archs = {pkg.architecture for pkg in packages}
+        archs = {pkg.architecture for pkg in self._packages}
         cache = Cache(directory=cache_dir, release=self._release, architectures=archs,
                       message_sink=self._message)
         if cache.is_complete():
@@ -301,7 +313,7 @@ class Checker:
             cache.dump()
         total_present = 0
         total_unknown = 0
-        for pkg in packages:
+        for pkg in self._packages:
             if not cache.is_known(package=pkg.name, architecture=pkg.architecture):
                 print(f'Unknown in release "{self._release}": {pkg} ')
                 total_unknown += 1
@@ -338,9 +350,15 @@ def main():
                         help='Show informational messages')
     parser.add_argument('-a', '--show-all', action='store_true',
                         help='Show stats for clean packages as well')
-    parser.add_argument('files', metavar='FILE', type=str, nargs='+', help='Debian package names')
+    parser.add_argument('--all-installed', action='store_true',
+                        help='Scan all packages installed on the system.')
+    parser.add_argument('files', metavar='FILE', type=str, nargs='*', help='.deb files to scan')
     args = parser.parse_args()
-    checker = Checker(release=args.release, files=args.files,
+    packages = []
+    if args.all_installed:
+        packages.extend(installed_packages())
+    packages.extend(scan_packages(args.files))
+    checker = Checker(release=args.release, packages=packages,
                       show_all=args.show_all, verbose=args.verbose)
     if checker.run():
         sys.exit(0)
