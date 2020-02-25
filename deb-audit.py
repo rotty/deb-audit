@@ -69,7 +69,7 @@ class Cache:
         self._archs = architectures
         self._release = release
         self._source_maps = {}
-        self._issue_map = {}
+        self._issue_map = None
         if message_sink is None:
             message_sink = lambda _: None
         self._message = message_sink
@@ -100,7 +100,7 @@ class Cache:
                     issue = Issue(**json_dict)
                     issue_map.setdefault(issue.source, []).append(issue)
         except FileNotFoundError:
-            pass
+            issue_map = None
         source_maps = {}
         for arch in self._archs:
             try:
